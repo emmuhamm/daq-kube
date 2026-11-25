@@ -1,0 +1,6 @@
+---
+deployments:
+  - path: namespace
+  - barrier: true
+    message: Ensure the process manager namespace exists
+  - path: manager

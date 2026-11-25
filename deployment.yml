@@ -1,5 +1,8 @@
 ---
 deployments:
+{% if target.name == 'pocket-k8s-pm' %}
+  - include: dune_applications/online/services/k8s-process-manager
+{% else %}
   - path: .submodules
     onlyRender: true
 
@@ -33,6 +36,7 @@ deployments:
     tags:
       - services
       - nodeport
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}

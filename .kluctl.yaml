@@ -5,6 +5,9 @@ args:
   - name: inside_kind
     default: false
 
+  - name: k8s_pm_image
+    default: ""
+
   - name: with_local_path_as_default_storageclass
     default: true
 
@@ -33,6 +36,10 @@ args:
     default: run4evah # only matters for np04-services
 
 targets:
+  - name: pocket-k8s-pm
+    args:
+      inside_kind: true
+
   - name: pocket
     args:
       inside_kind: true

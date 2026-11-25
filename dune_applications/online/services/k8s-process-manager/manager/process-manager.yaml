@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: drunc-process-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: drunc-process-manager-observer
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: drunc-process-manager-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: drunc-process-manager-observer
+subjects:
+  - kind: ServiceAccount
+    name: drunc-process-manager
+    namespace: drunc-process-manager
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drunc-process-manager-config
+data:
+  process-manager.json: |
+    {
+      "type": "k8s",
+      "name": "K8sProcessManager",
+      "environment": {
+        "DUNEDAQ_ERS_ERROR": "erstrace,throttle,lstdout",
+        "DUNEDAQ_ERS_FATAL": "erstrace,lstdout",
+        "DUNEDAQ_ERS_INFO": "erstrace,throttle,lstdout",
+        "DUNEDAQ_ERS_WARNING": "erstrace,throttle,lstdout"
+      },
+      "opmon_uri": {"path": "/tmp/drunc-opmon.json", "type": "file"},
+      "opmon_conf": {"level": "info", "interval_s": 10.0},
+      "settings": {"home_path_base": "/tmp"}
+    }
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    current-context: in-cluster
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    contexts:
+      - name: in-cluster
+        context:
+          cluster: in-cluster
+          user: service-account
+    users:
+      - name: service-account
+        user:
+          exec:
+            apiVersion: client.authentication.k8s.io/v1beta1
+            command: python3
+            args:
+              - -c
+              - |
+                import datetime, json
+                from pathlib import Path
+                token = Path('/var/run/secrets/kubernetes.io/serviceaccount/token').read_text().strip()
+                expiration = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)
+                print(json.dumps({'apiVersion': 'client.authentication.k8s.io/v1beta1', 'kind': 'ExecCredential', 'status': {'token': token, 'expirationTimestamp': expiration.strftime('%Y-%m-%dT%H:%M:%SZ')}}))
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drunc-process-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drunc-process-manager
+  template:
+    metadata:
+      labels:
+        app: drunc-process-manager
+    spec:
+      serviceAccountName: drunc-process-manager
+      containers:
+        - name: process-manager
+          image: "{{ args.k8s_pm_image }}"
+          workingDir: /tmp
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              export SPACK_ROOT=/cvmfs/dunedaq-development.opensciencegrid.org/nightly/last_fddaq/spack-installation
+              source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh
+              setup_dbt latest
+              dbt-setup-release -n last_fddaq
+              exec drunc-process-manager /etc/drunc/process-manager.json 10054
+          env:
+            - name: KUBECONFIG
+              value: /etc/drunc/kubeconfig
+          ports:
+            - name: grpc
+              containerPort: 10054
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+          volumeMounts:
+            - name: config
+              mountPath: /etc/drunc
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: drunc-process-manager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drunc-process-manager
+spec:
+  type: ClusterIP
+  selector:
+    app: drunc-process-manager
+  ports:
+    - name: grpc
+      port: 10054
+      targetPort: grpc
